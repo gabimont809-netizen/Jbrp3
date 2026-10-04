@@ -1,0 +1,466 @@
+# ============================================================
+#        VIRTUAL ROBLOX PC - SETUP
+#        Windows + Tailscale + Roblox + Roblox Studio
+# ============================================================
+
+$ErrorActionPreference = "Stop"
+
+$AppName = "VirtualRobloxPC"
+$BaseDir = "C:\VirtualRobloxPC"
+$LogDir = "$BaseDir\Logs"
+
+# ------------------------------------------------------------
+# CORES / INTERFACE
+# ------------------------------------------------------------
+
+function Write-Header {
+    Clear-Host
+    Write-Host "======================================================" -ForegroundColor Cyan
+    Write-Host "             VIRTUAL ROBLOX PC                       " -ForegroundColor Cyan
+    Write-Host "       Roblox + Roblox Studio + Tailscale            " -ForegroundColor Cyan
+    Write-Host "======================================================" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Write-Step($Text) {
+    Write-Host "[*] $Text" -ForegroundColor Yellow
+}
+
+function Write-OK($Text) {
+    Write-Host "[+] $Text" -ForegroundColor Green
+}
+
+function Write-ErrorMsg($Text) {
+    Write-Host "[!] $Text" -ForegroundColor Red
+}
+
+# ------------------------------------------------------------
+# VERIFICAR ADMINISTRADOR
+# ------------------------------------------------------------
+
+function Test-Administrator {
+    $currentUser = New-Object Security.Principal.WindowsPrincipal(
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+    )
+
+    return $currentUser.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+}
+
+if (-not (Test-Administrator)) {
+    Write-ErrorMsg "Execute este arquivo como Administrador."
+    Read-Host "Pressione ENTER para sair"
+    exit
+}
+
+# ------------------------------------------------------------
+# CRIAR PASTAS
+# ------------------------------------------------------------
+
+Write-Header
+Write-Step "Criando estrutura do PC virtual..."
+
+New-Item -ItemType Directory -Force -Path $BaseDir | Out-Null
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+$LogFile = "$LogDir\setup.log"
+
+Start-Transcript -Path $LogFile -Append | Out-Null
+
+Write-OK "Pastas criadas."
+
+# ------------------------------------------------------------
+# INFORMAÇÕES DO SISTEMA
+# ------------------------------------------------------------
+
+Write-Step "Verificando computador..."
+
+$Computer = Get-CimInstance Win32_ComputerSystem
+$OS = Get-CimInstance Win32_OperatingSystem
+$CPU = Get-CimInstance Win32_Processor | Select-Object -First 1
+$RAM = [math]::Round($Computer.TotalPhysicalMemory / 1GB, 2)
+
+Write-Host ""
+Write-Host "Computador : $($Computer.Name)"
+Write-Host "CPU        : $($CPU.Name)"
+Write-Host "RAM        : $RAM GB"
+Write-Host "Windows    : $($OS.Caption)"
+Write-Host ""
+
+# ------------------------------------------------------------
+# CRIAR PONTO DE RESTAURAÇÃO
+# ------------------------------------------------------------
+
+Write-Step "Tentando criar ponto de restauração..."
+
+try {
+    Enable-ComputerRestore -Drive "C:\" -ErrorAction SilentlyContinue
+
+    Checkpoint-Computer `
+        -Description "Antes_VirtualRobloxPC" `
+        -RestorePointType "MODIFY_SETTINGS" `
+        -ErrorAction SilentlyContinue
+
+    Write-OK "Ponto de restauração processado."
+}
+catch {
+    Write-Host "Não foi possível criar o ponto de restauração."
+}
+
+# ------------------------------------------------------------
+# WINDOWS UPDATE
+# ------------------------------------------------------------
+
+Write-Step "Verificando Windows Update..."
+
+try {
+    $updateService = Get-Service wuauserv -ErrorAction SilentlyContinue
+
+    if ($updateService) {
+        if ($updateService.Status -ne "Running") {
+            Start-Service wuauserv -ErrorAction SilentlyContinue
+        }
+
+        Write-OK "Serviço Windows Update disponível."
+    }
+}
+catch {
+    Write-Host "Windows Update não pôde ser configurado automaticamente."
+}
+
+# ------------------------------------------------------------
+# INSTALAR WINGET
+# ------------------------------------------------------------
+
+Write-Step "Verificando WinGet..."
+
+$Winget = Get-Command winget -ErrorAction SilentlyContinue
+
+if ($Winget) {
+    Write-OK "WinGet encontrado."
+}
+else {
+    Write-ErrorMsg "WinGet não encontrado."
+    Write-Host "Instale o App Installer pela Microsoft Store."
+}
+
+# ------------------------------------------------------------
+# INSTALAR TAILSCALE
+# ------------------------------------------------------------
+
+Write-Step "Verificando Tailscale..."
+
+$Tailscale = Get-Command tailscale -ErrorAction SilentlyContinue
+
+if (-not $Tailscale) {
+
+    if ($Winget) {
+
+        Write-Step "Instalando Tailscale..."
+
+        try {
+            winget install `
+                --id Tailscale.Tailscale `
+                --exact `
+                --accept-source-agreements `
+                --accept-package-agreements `
+                --silent
+
+            Write-OK "Tailscale instalado."
+        }
+        catch {
+            Write-ErrorMsg "Falha ao instalar Tailscale."
+        }
+
+    }
+    else {
+        Write-Host "Instale o Tailscale manualmente."
+    }
+
+}
+else {
+    Write-OK "Tailscale já está instalado."
+}
+
+# ------------------------------------------------------------
+# INSTALAR ROBLOX
+# ------------------------------------------------------------
+
+Write-Step "Verificando Roblox..."
+
+$RobloxPackage = Get-AppxPackage -Name "*Roblox*" -ErrorAction SilentlyContinue
+
+if ($RobloxPackage) {
+
+    Write-OK "Roblox já está instalado."
+
+}
+else {
+
+    Write-Host ""
+    Write-Host "O Roblox será instalado pela Microsoft Store/WinGet quando disponível."
+
+    if ($Winget) {
+
+        try {
+
+            winget search Roblox `
+                --accept-source-agreements `
+                2>$null
+
+        }
+        catch {
+
+            Write-Host "Roblox não encontrado automaticamente no WinGet."
+
+        }
+
+    }
+
+}
+
+# ------------------------------------------------------------
+# ROBLOX STUDIO
+# ------------------------------------------------------------
+
+Write-Step "Preparando Roblox Studio..."
+
+$StudioPaths = @(
+    "$env:LOCALAPPDATA\Roblox\Versions",
+    "$env:ProgramFiles\Roblox"
+)
+
+$StudioFound = $false
+
+foreach ($Path in $StudioPaths) {
+
+    if (Test-Path $Path) {
+
+        $StudioFound = $true
+        Write-OK "Arquivos relacionados ao Roblox encontrados em:"
+        Write-Host $Path
+
+    }
+
+}
+
+if (-not $StudioFound) {
+
+    Write-Host ""
+    Write-Host "Roblox Studio não foi encontrado."
+    Write-Host "Baixe o Roblox Studio pelo site oficial do Roblox."
+
+}
+
+# ------------------------------------------------------------
+# DESEMPENHO DO WINDOWS
+# ------------------------------------------------------------
+
+Write-Step "Configurando algumas opções de desempenho..."
+
+try {
+
+    # Desativar aplicativos em segundo plano desnecessários
+    New-Item `
+        -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" `
+        -Force `
+        -ErrorAction SilentlyContinue | Out-Null
+
+}
+catch {}
+
+# ------------------------------------------------------------
+# PLANO DE ENERGIA
+# ------------------------------------------------------------
+
+Write-Step "Configurando plano de energia..."
+
+try {
+
+    powercfg /setactive SCHEME_MIN
+
+    Write-OK "Plano de alto desempenho selecionado."
+
+}
+catch {
+
+    Write-Host "Não foi possível alterar o plano de energia."
+
+}
+
+# ------------------------------------------------------------
+# LIMPEZA TEMPORÁRIA
+# ------------------------------------------------------------
+
+Write-Step "Limpando arquivos temporários..."
+
+try {
+
+    Remove-Item "$env:TEMP\*" `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
+
+    Write-OK "Arquivos temporários limpos."
+
+}
+catch {
+
+    Write-Host "Alguns arquivos temporários não puderam ser removidos."
+
+}
+
+# ------------------------------------------------------------
+# CRIAR ATALHO DE CONTROLE
+# ------------------------------------------------------------
+
+Write-Step "Criando scripts auxiliares..."
+
+$TailscaleScript = @'
+@echo off
+title Tailscale - Virtual Roblox PC
+
+echo ==========================================
+echo       TAILSCALE - ROBLOX PC
+echo ==========================================
+echo.
+
+where tailscale >nul 2>&1
+
+if errorlevel 1 (
+    echo Tailscale nao esta instalado.
+    pause
+    exit /b 1
+)
+
+echo.
+echo Status da rede:
+tailscale status
+
+echo.
+echo IP Tailscale:
+tailscale ip -4
+
+echo.
+pause
+'@
+
+Set-Content `
+    -Path "$BaseDir\tailscale-status.bat" `
+    -Value $TailscaleScript `
+    -Encoding UTF8
+
+# ------------------------------------------------------------
+# CRIAR SCRIPT DE INFORMAÇÕES
+# ------------------------------------------------------------
+
+$InfoScript = @'
+@echo off
+title Virtual Roblox PC - Informacoes
+
+echo ==========================================
+echo       VIRTUAL ROBLOX PC
+echo ==========================================
+echo.
+
+echo COMPUTADOR:
+hostname
+
+echo.
+echo USUARIO:
+whoami
+
+echo.
+echo IP LOCAL:
+ipconfig
+
+echo.
+echo TAILSCALE:
+where tailscale >nul 2>&1
+
+if errorlevel 1 (
+    echo Tailscale nao instalado.
+) else (
+    tailscale ip -4
+    echo.
+    tailscale status
+)
+
+echo.
+pause
+'@
+
+Set-Content `
+    -Path "$BaseDir\system-info.bat" `
+    -Value $InfoScript `
+    -Encoding UTF8
+
+# ------------------------------------------------------------
+# CRIAR SCRIPT DE REINICIALIZAÇÃO
+# ------------------------------------------------------------
+
+$RestartScript = @'
+@echo off
+title Virtual Roblox PC - Reiniciar
+
+echo ==========================================
+echo       REINICIAR PC VIRTUAL
+echo ==========================================
+echo.
+
+choice /C SN /M "Deseja reiniciar agora?"
+
+if errorlevel 2 exit /b 0
+if errorlevel 1 shutdown /r /t 5
+'@
+
+Set-Content `
+    -Path "$BaseDir\restart.bat" `
+    -Value $RestartScript `
+    -Encoding UTF8
+
+# ------------------------------------------------------------
+# CRIAR CONFIGURAÇÃO
+# ------------------------------------------------------------
+
+$config = @{
+    Name = $AppName
+    Roblox = $true
+    RobloxStudio = $true
+    Tailscale = $true
+    PerformanceMode = $true
+    Created = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+}
+
+$config | ConvertTo-Json | Set-Content `
+    "$BaseDir\config.json" `
+    -Encoding UTF8
+
+# ------------------------------------------------------------
+# FINAL
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "======================================================" -ForegroundColor Green
+Write-Host "          CONFIGURAÇÃO CONCLUÍDA                     " -ForegroundColor Green
+Write-Host "======================================================" -ForegroundColor Green
+Write-Host ""
+
+Write-Host "Arquivos criados em:"
+Write-Host "$BaseDir"
+
+Write-Host ""
+Write-Host "Próximos passos:"
+Write-Host "1. Abra o Tailscale."
+Write-Host "2. Entre na sua conta."
+Write-Host "3. Conecte o computador à sua rede Tailscale."
+Write-Host "4. Use o IP Tailscale para acessar o computador."
+Write-Host "5. Instale Roblox e Roblox Studio."
+Write-Host ""
+
+Write-OK "VirtualRobloxPC preparado."
+
+Stop-Transcript | Out-Null
+
+Read-Host "Pressione ENTER para fechar"
